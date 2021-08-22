@@ -24,47 +24,28 @@
 #include <WiFiClientSecure.h>
 #include <MQTT.h>
 
-#include "esp_wifi.h"
-#include "esp_pm.h"
-
 #include "esp_adc_cal.h"
 
 #define ESSID "YOUR WIFI SSID"
 #define PSK   "YOUR WIFI PASSWD"
 
+#define LOW_BATTERY_VOLTAGE 3.20
+#define VERY_LOW_BATTERY_VOLTAGE 3.10
+#define CRITICALLY_LOW_BATTERY_VOLTAGE 3.00
+
 String MQTTServerName = "YOUR MQTT SERVER";
-uint16_t MQTTPort = 8883;
+uint16_t MQTTPort = 1883;
 String MQTTUsername = "MQTT USERNAME";
 String MQTTPassword = "MQTT PASSWORD";
 String MQTTDeviceName = "Firebeetle";
 String MQTTRootTopic = "test/firebeetle";
-String MQTTRootCA = "-----BEGIN CERTIFICATE-----\n" \
-                    "YOUR ROOT CA CERTIFICATE HERE 6789012345678912345012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567890123456789012345678901234567890123456789012345678901234\n" \
-                    "1234567=\n" \
-                    "-----END CERTIFICATE-----\n";
 
-//cached WiFi parameters
-//DHCP does not take long, so static IPs are commented out
 RTC_NOINIT_ATTR struct {
-  uint8_t mac [6];
-  uint8_t chl;
-  //uint32_t ip;
-  //uint32_t gw;
-  //uint32_t msk;
-  //uint32_t dns;
-} cfgbuf;
+  uint8_t bssid[6];
+  uint8_t channel;
 
-RTC_NOINIT_ATTR uint64_t NumberOfRestarts;
+  uint64_t NumberOfRestarts;
+} cache;
 
 /******************************************************************************
 Description.: bring the WiFi up
@@ -75,28 +56,20 @@ Return Value: true if WiFi is up, false if it timed out
 bool WiFiUP(bool tryCachedValuesFirst) {
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setHostname("Firebeetle");
-
-  /*wifi_config_t current_conf;
-  esp_wifi_get_config(WIFI_IF_STA, &current_conf);
-  current_conf.sta.listen_interval = 1;
-  esp_wifi_set_config(WIFI_IF_STA, &current_conf);
-  esp_wifi_set_ps(WIFI_PS_MAX_MODEM);*/
   
-  if(tryCachedValuesFirst && cfgbuf.chl > 0) {
+  if(tryCachedValuesFirst && cache.channel > 0) {
     Serial.printf("Cached values as follows:\n");
-    //Serial.printf(" Local IP...: %s\n", IPAddress(cfgbuf.ip).toString().c_str());
-    //Serial.printf(" Subnet Mask: %s\n", IPAddress(cfgbuf.msk).toString().c_str());
-    //Serial.printf(" DNS........: %s\n", IPAddress(cfgbuf.dns).toString().c_str());
-    //Serial.printf(" Gateway IP.: %s\n", IPAddress(cfgbuf.gw).toString().c_str());
-    Serial.printf(" Channel....: %d\n", cfgbuf.chl);
-    Serial.printf(" BSSID......: %x:%x:%x:%x:%x:%x\n", cfgbuf.mac[0], cfgbuf.mac[1], cfgbuf.mac[2], cfgbuf.mac[3], cfgbuf.mac[4], cfgbuf.mac[5]);
+    Serial.printf(" Channel....: %d\n", cache.channel);
+    Serial.printf(" BSSID......: %x:%x:%x:%x:%x:%x\n", cache.bssid[0], \
+                                                       cache.bssid[1], \
+                                                       cache.bssid[2], \
+                                                       cache.bssid[3], \
+                                                       cache.bssid[4], \
+                                                       cache.bssid[5]);
 
-    // This prevents DHCP, but it does not save more than perhaps 10ms: 
-    // WiFi.config(cfgbuf.ip, cfgbuf.gw, cfgbuf.msk, cfgbuf.dns);
-    WiFi.begin(ESSID, PSK, cfgbuf.chl, cfgbuf.mac);
+    WiFi.begin(ESSID, PSK, cache.channel, cache.bssid);
 
-    for (unsigned long i=millis(); millis()-i < 2000;) {
+    for (unsigned long i=millis(); millis()-i < 10000;) {
       delay(10);
 
       if (WiFi.status() == WL_CONNECTED) {
@@ -106,8 +79,10 @@ bool WiFiUP(bool tryCachedValuesFirst) {
     }
   }
 
-  memset(&cfgbuf, 0, sizeof(cfgbuf));
-  
+  cache.channel = 0;
+  for (uint32_t i = 0; i < sizeof(cache.bssid); i++)
+    cache.bssid[i] = 0;
+
   // try it with the slow process
   WiFi.begin(ESSID, PSK);
   
@@ -118,12 +93,9 @@ bool WiFiUP(bool tryCachedValuesFirst) {
       Serial.printf("WiFi connected (%lu)\n", millis()-i);
   
       uint8_t *bssid = WiFi.BSSID();
-      for (uint32_t i = 0; i < sizeof(cfgbuf.mac); i++) cfgbuf.mac[i] = bssid[i];
-      cfgbuf.chl = WiFi.channel();
-      //cfgbuf.ip = WiFi.localIP();
-      //cfgbuf.gw = WiFi.gatewayIP();
-      //cfgbuf.msk = WiFi.subnetMask();
-      //cfgbuf.dns = WiFi.dnsIP();
+      for (uint32_t i = 0; i < sizeof(cache.bssid); i++)
+        cache.bssid[i] = bssid[i];
+      cache.channel = WiFi.channel();
     
       return true;
     }
@@ -146,20 +118,6 @@ float readBattery() {
   int rounds = 11;
   esp_adc_cal_characteristics_t adc_chars;
 
-  // Is this ESP32-E two point calibrated?
-  if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_TP) == ESP_OK) {
-    Serial.println("eFuse Two Point: Supported");
-  } else {
-    Serial.println("eFuse Two Point: NOT supported");
-  }
-
-  //is this ESP32-E one point calibrated?
-  if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_VREF) == ESP_OK) {
-    Serial.println("eFuse Vref: Supported");
-  } else {
-    Serial.println("eFuse Vref: NOT supported");
-  }
-
   //battery voltage divided by 2 can be measured at GPIO34, which equals ADC1_CHANNEL6
   adc1_config_width(ADC_WIDTH_BIT_12);
   adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
@@ -173,8 +131,8 @@ float readBattery() {
     default:
       Serial.printf("Characterized using Default Vref (%d mV)\r\n", 1100);
   }
-  
-  //to avoid noise sample the pin several times and average the result
+
+   //to avoid noise, sample the pin several times and average the result
   for(int i=1; i<=rounds; i++) {
     value += adc1_get_raw(ADC1_CHANNEL_6);
   }
@@ -186,7 +144,7 @@ float readBattery() {
 }
 
 /******************************************************************************
-Description.: since this is battery sensor everything happens in setup
+Description.: since this is a battery sensor, everything happens in setup
               and when the tonguing' is done the device enters deep-sleep
 Input Value.: -
 Return Value: -
@@ -195,23 +153,69 @@ void setup() {
   //visual feedback when we are active, turn on onboard LED
   pinMode(2, OUTPUT);
   digitalWrite(2, HIGH);
-  
+  cache.NumberOfRestarts++;
+
   Serial.begin(115200);
   Serial.print("===================================================\r\n");
-  Serial.println("FireBeetle starting up\r\nCompiled at: " __DATE__ " - " __TIME__);
+  Serial.printf("FireBeetle starting up\r\n" \
+                " Compiled at: " __DATE__ " - " __TIME__ "\r\n" \
+                " ESP-IDF: %s\r\n", esp_get_idf_version());
 
   //read battery voltage
   float BatteryVoltage = readBattery();
   Serial.printf("Voltage: %4.3f V\r\n", BatteryVoltage);
-  
+
+  //a reset is required to wakeup again from below CRITICALLY_LOW_BATTERY_VOLTAGE
+  //this is to prevent damaging the empty battery by saving as much power as possible
+  if (BatteryVoltage < CRITICALLY_LOW_BATTERY_VOLTAGE) {
+    Serial.println("Battery critically low, hibernating...");
+
+    //switch off everything that might consume power
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_XTAL, ESP_PD_OPTION_OFF);
+    //esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_OFF);
+    //esp_sleep_pd_config(ESP_PD_DOMAIN_CPU, ESP_PD_OPTION_OFF);
+
+    //disable all wakeup sources
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    
+    digitalWrite(2, LOW);
+    esp_deep_sleep_start();
+
+    Serial.println("This should never get printed");
+    return;
+  }
+
+  //if battery is below LOW_BATTERY_VOLTAGE but still above CRITICALLY_LOW_BATTERY_VOLTAGE, 
+  //stop doing the regular work
+  //when put on charge the device will wakeup after a while and recognize voltage is OK
+  //this way the battery can run low, put still wakeup without physical interaction
+  if (BatteryVoltage < LOW_BATTERY_VOLTAGE) {
+    Serial.println("Battery low, deep sleeping...");
+
+    //sleep ~60 minutes if battery is CRITICALLY_LOW_BATTERY_VOLTAGE to VERY_LOW_BATTERY_VOLTAGE
+    //sleep ~10 minutes if battery is VERY_LOW_BATTERY_VOLTAGE to LOW_BATTERY_VOLTAGE
+    uint64_t sleeptime = (BatteryVoltage >= VERY_LOW_BATTERY_VOLTAGE) ? \
+                           10*60*1000000ULL : 60*60*1000000ULL;
+    
+    esp_sleep_enable_timer_wakeup(sleeptime);
+    digitalWrite(2, LOW);
+    esp_deep_sleep_start();
+    
+    Serial.println("This should never get printed");
+    return;
+  }
+
   //distinguish first start or wakeup
   if (esp_reset_reason() == ESP_RST_POWERON) {
-    Serial.printf("ESP was just switched ON\n");
-    NumberOfRestarts = 0;
+    Serial.printf("ESP was just switched ON\r\n");
+    cache.NumberOfRestarts = 0;
 
     //default is to have WiFi off
     if (WiFi.getMode() != WIFI_OFF) {
-      Serial.printf("WiFi wasn't off!\n");
+      Serial.printf("WiFi wasn't off!\r\n");
       WiFi.persistent(true);
       WiFi.mode(WIFI_OFF);
     }
@@ -224,42 +228,38 @@ void setup() {
 
     WiFiUP(false);
   } else {
-    NumberOfRestarts++;
-    Serial.printf("ESP woke up (%lu)\n", NumberOfRestarts);
+    Serial.printf("ESP woke up (%lu)\n", cache.NumberOfRestarts);
 
     //read RTC
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    Serial.printf("Total Time since RstPowerOn: %lu s\n", tv.tv_sec);
+    Serial.printf("Total Time since RstPowerOn: %lu s\r\n", tv.tv_sec);
 
     WiFiUP(true);
   }
 
-  //establish connection to MQTT server, use the ROOT-CA to authenticate
-  //"net" is instanciated from a class that uses ciphers
-  //using TLS is a HUGE strain on battery, without TLS the battery will last longer
-  WiFiClientSecure net;
+  //establish connection to MQTT server (~160 ms for plain text, ~1600ms for TLS)
+  WiFiClient net;
   MQTTClient MQTTClient;
-  net.setCACert(MQTTRootCA.c_str());
   MQTTClient.setTimeout(5000);
   MQTTClient.begin(MQTTServerName.c_str(), MQTTPort, net);
   if( MQTTClient.connect(MQTTDeviceName.c_str(), MQTTUsername.c_str(), MQTTPassword.c_str())) {
-    MQTTClient.publish(MQTTRootTopic+"/battery", String(BatteryVoltage), false, 1);
+    Serial.println("Publishing MQTT message");
+    MQTTClient.publish(MQTTRootTopic+"/battery", String(BatteryVoltage, 3), false, 2);
   }
-  
+
   //bring everything down
-  WiFi.disconnect();
-  WiFi.mode(WIFI_OFF);
-  Serial.printf("Sleep at %d ms\n", millis());
-  esp_sleep_enable_timer_wakeup(10*60*1000*1000); // Sleep 10 minutes (in microseconds)
+  WiFi.disconnect(true, true);
+  Serial.printf("Sleep at %d ms\r\n", millis());
+  esp_sleep_enable_timer_wakeup(1*1000000ULL);
 
   //LED off and sleep
   digitalWrite(2, LOW);
   esp_deep_sleep_start();
   
-  Serial.printf("This should never get printed\n");
+  Serial.println("This should never get printed");
 }
 
 void loop() {
-  Serial.printf("This should never get printed\n");
+  Serial.println("This should never get printed");
 }
