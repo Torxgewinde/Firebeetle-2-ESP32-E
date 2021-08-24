@@ -21,7 +21,6 @@
 ********************************************************************************/
 
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <MQTT.h>
 
 #include "esp_adc_cal.h"
@@ -90,7 +89,7 @@ bool WiFiUP(bool tryCachedValuesFirst) {
     delay(10);
   
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("WiFi connected (%lu)\n", millis()-i);
+      Serial.printf("WiFi connected (%lu)\r\n", millis()-i);
   
       uint8_t *bssid = WiFi.BSSID();
       for (uint32_t i = 0; i < sizeof(cache.bssid); i++)
@@ -101,7 +100,7 @@ bool WiFiUP(bool tryCachedValuesFirst) {
     }
   }
 
-  Serial.printf("WiFi NOT connected\n");
+  Serial.printf("WiFi NOT connected\r\n");
   return false;
 }
 
@@ -238,20 +237,26 @@ void setup() {
     WiFiUP(true);
   }
 
-  //establish connection to MQTT server (~160 ms for plain text, ~1600ms for TLS)
+  //establish connection to MQTT server
   WiFiClient net;
   MQTTClient MQTTClient;
   MQTTClient.setTimeout(5000);
   MQTTClient.begin(MQTTServerName.c_str(), MQTTPort, net);
   if( MQTTClient.connect(MQTTDeviceName.c_str(), MQTTUsername.c_str(), MQTTPassword.c_str())) {
     Serial.println("Publishing MQTT message");
-    MQTTClient.publish(MQTTRootTopic+"/battery", String(BatteryVoltage, 3), false, 2);
+    MQTTClient.publish(MQTTRootTopic+"/BatteryVoltage", String(BatteryVoltage, 3), false, 2);
+    MQTTClient.publish(MQTTRootTopic+"/PIR", (digitalRead(4))?"On":"Off", false, 2);
   }
 
   //bring everything down
   WiFi.disconnect(true, true);
-  Serial.printf("Sleep at %d ms\r\n", millis());
-  esp_sleep_enable_timer_wakeup(1*1000000ULL);
+
+  //define what wakes device up again
+  //wakeup in ~12h or if GPIO4 changes state
+  esp_sleep_enable_timer_wakeup(12*60*60*1000000ULL);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, (digitalRead(4))?0:1);
+
+  Serial.printf("=== Sleep at %d ms ===\r\n", millis());
 
   //LED off and sleep
   digitalWrite(2, LOW);
