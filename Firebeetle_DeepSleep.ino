@@ -1,8 +1,11 @@
 /*******************************************************************************
 #                                                                              #
-# Using the Firebeetle 2 ESP32-E as battery powered sensor node                #
+# Using the Firebeetle 2 ESP32-E as battery powered PIR sensor                 #
+# Project: https://github.com/Torxgewinde/Firebeetle-2-ESP32-E                 # 
 #                                                                              #
-#                                                                              #
+# Firebeetle documentation at:                                                 #
+# https://wiki.dfrobot.com/FireBeetle_Board_ESP32_E_SKU_DFR0654                #                                                             #
+#                                                                              # 
 # Copyright (C) 2021 Tom Stöveken                                              #
 #                                                                              #
 # This program is free software; you can redistribute it and/or modify         #
@@ -46,6 +49,10 @@ RTC_NOINIT_ATTR struct {
   uint64_t NumberOfRestarts;
 } cache;
 
+//PIR motion sensor is connected to GPIO4 (Pin: D12)
+#define PIR_GPIO 4
+#define PIR_DEEPSLEEP_PIN GPIO_NUM_4
+
 /******************************************************************************
 Description.: bring the WiFi up
 Input Value.: When "tryCachedValuesFirst" is true the function tries to use
@@ -57,14 +64,14 @@ bool WiFiUP(bool tryCachedValuesFirst) {
   WiFi.mode(WIFI_STA);
   
   if(tryCachedValuesFirst && cache.channel > 0) {
-    Serial.printf("Cached values as follows:\n");
-    Serial.printf(" Channel....: %d\n", cache.channel);
-    Serial.printf(" BSSID......: %x:%x:%x:%x:%x:%x\n", cache.bssid[0], \
-                                                       cache.bssid[1], \
-                                                       cache.bssid[2], \
-                                                       cache.bssid[3], \
-                                                       cache.bssid[4], \
-                                                       cache.bssid[5]);
+    Serial.printf("Cached values as follows:\r\n");
+    Serial.printf(" Channel....: %d\r\n", cache.channel);
+    Serial.printf(" BSSID......: %x:%x:%x:%x:%x:%x\r\n", cache.bssid[0], \
+                                                         cache.bssid[1], \
+                                                         cache.bssid[2], \
+                                                         cache.bssid[3], \
+                                                         cache.bssid[4], \
+                                                         cache.bssid[5]);
 
     WiFi.begin(ESSID, PSK, cache.channel, cache.bssid);
 
@@ -72,7 +79,7 @@ bool WiFiUP(bool tryCachedValuesFirst) {
       delay(10);
 
       if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("WiFi connected with cached values (%lu)\n", millis()-i);
+        Serial.printf("WiFi connected with cached values (%lu)\r\n", millis()-i);
         return true;
       } 
     }
@@ -152,6 +159,11 @@ void setup() {
   //visual feedback when we are active, turn on onboard LED
   pinMode(2, OUTPUT);
   digitalWrite(2, HIGH);
+
+  //read PIR state now, because it might change during the time it takes to connect to WiFi
+  pinMode(PIR_GPIO, INPUT);
+  uint8_t PIR_State = digitalRead(PIR_GPIO);
+  
   cache.NumberOfRestarts++;
 
   Serial.begin(115200);
@@ -227,7 +239,7 @@ void setup() {
 
     WiFiUP(false);
   } else {
-    Serial.printf("ESP woke up (%lu)\n", cache.NumberOfRestarts);
+    Serial.printf("ESP woke up (%lu)\r\n", cache.NumberOfRestarts);
 
     //read RTC
     struct timeval tv;
@@ -243,9 +255,24 @@ void setup() {
   MQTTClient.setTimeout(5000);
   MQTTClient.begin(MQTTServerName.c_str(), MQTTPort, net);
   if( MQTTClient.connect(MQTTDeviceName.c_str(), MQTTUsername.c_str(), MQTTPassword.c_str())) {
-    Serial.println("Publishing MQTT message");
+    Serial.println("Publishing MQTT message"); 
+    
+    //connecting to WiFi takes some time,
+    //it might happen that PIR state changes during that time
+    //ensure that MQTT reports this by sending both states if it did change indeed
+    if(PIR_State == digitalRead(PIR_GPIO)) {
+      //PIR state did not change, just publish one state
+      MQTTClient.publish(MQTTRootTopic+"/PIR", (PIR_State)?"On":"Off", false, 2);
+    } else {
+      //PIR state changed, first publish what it was when starting sketch
+      MQTTClient.publish(MQTTRootTopic+"/PIR", (PIR_State)?"On":"Off", false, 2);
+
+      //set variable to the new state of PIR and publish what it is now
+      PIR_State != PIR_State; 
+      MQTTClient.publish(MQTTRootTopic+"/PIR", (PIR_State)?"On":"Off", false, 2);
+    }
+
     MQTTClient.publish(MQTTRootTopic+"/BatteryVoltage", String(BatteryVoltage, 3), false, 2);
-    MQTTClient.publish(MQTTRootTopic+"/PIR", (digitalRead(4))?"On":"Off", false, 2);
   }
 
   //bring everything down
@@ -254,7 +281,7 @@ void setup() {
   //define what wakes device up again
   //wakeup in ~12h or if GPIO4 changes state
   esp_sleep_enable_timer_wakeup(12*60*60*1000000ULL);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, (digitalRead(4))?0:1);
+  esp_sleep_enable_ext0_wakeup(PIR_DEEPSLEEP_PIN, (PIR_State)?0:1);
 
   Serial.printf("=== Sleep at %d ms ===\r\n", millis());
 
