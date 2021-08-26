@@ -13,6 +13,7 @@ This WiFi motion sensor consists of:
 Mainly the ESP32 saves power by entering DeepSleep state. In this state it draws about 23 µA if the "LowPower-Pad" to the RGB-color-LED is cut. Two events cause the ESP32 to wake up:
 - either a timer, or if
 - the PIR sensor changes state.
+
 The PIR state is transmitted via WiFi/MQTT and can be used in homeautomation software for further actions.
 
 Powersaving
