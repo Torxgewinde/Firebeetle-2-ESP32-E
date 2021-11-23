@@ -42,16 +42,40 @@ String MQTTPassword = "MQTT PASSWORD";
 String MQTTDeviceName = "Firebeetle";
 String MQTTRootTopic = "test/firebeetle";
 
+enum _state {
+  S_STARTUP = 0,
+  S_IDLE,
+  S_MOTION,
+  S_IGNORE_PIR_AFTER_MOTION,
+  S_IGNORE_PIR_AFTER_REST,
+}; 
+
 RTC_NOINIT_ATTR struct {
   uint8_t bssid[6];
   uint8_t channel;
 
-  uint64_t NumberOfRestarts;
+  float BatteryVoltage;      //battery voltage in V
+  uint64_t NumberOfRestarts; //number of restarts
+  uint64_t ActiveTime;       //time being active in ms
+
+  enum _state state;         //keep track of current state
 } cache;
 
 //PIR motion sensor is connected to GPIO4 (Pin: D12)
 #define PIR_GPIO 4
 #define PIR_DEEPSLEEP_PIN GPIO_NUM_4
+
+//Panasonic-PIRs circuit stability time can be up to 30s according to datasheet, however 5s seems Ok
+#define STABILITY_TIME 5*1000000ULL
+
+//time to completly ignore sensor after motion
+#define SHORT_TIME 5*60*1000000ULL
+
+//stay in MOTION state for at least this time, time starts again on motion (=presence sensor)
+#define DWELL_TIME 15*60*1000000ULL
+
+//periodically wakeup and report battery status even without motion
+#define LONG_TIME 12*60*60*1000000ULL
 
 /******************************************************************************
 Description.: bring the WiFi up
@@ -89,7 +113,7 @@ bool WiFiUP(bool tryCachedValuesFirst) {
   for (uint32_t i = 0; i < sizeof(cache.bssid); i++)
     cache.bssid[i] = 0;
 
-  // try it with the slow process
+  // try it with the slower process
   WiFi.begin(ESSID, PSK);
   
   for (unsigned long i=millis(); millis()-i < 60000;) {
@@ -138,7 +162,7 @@ float readBattery() {
       Serial.printf("Characterized using Default Vref (%d mV)\r\n", 1100);
   }
 
-   //to avoid noise, sample the pin several times and average the result
+  //to avoid noise, sample the pin several times and average the result
   for(int i=1; i<=rounds; i++) {
     value += adc1_get_raw(ADC1_CHANNEL_6);
   }
@@ -147,6 +171,41 @@ float readBattery() {
   //due to the voltage divider (1M+1M) values must be multiplied by 2
   //and convert mV to V
   return esp_adc_cal_raw_to_voltage(value, &adc_chars)*2.0/1000.0;
+}
+
+/******************************************************************************
+Description.: signal motion, e.g. send MQTT message
+Input Value.: PIR_state to transmit, true for motion, false for no motion
+Return Value: true if OK, false if errors occured
+******************************************************************************/
+bool SignalMotion(bool PIR_State) {
+  char buf[256] = {0};
+  
+  Serial.printf("Signalling motion: %d\r\n", PIR_State);
+
+  //read RTC
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  
+  //establish connection to MQTT server
+  WiFiClient net;
+  MQTTClient MQTTClient;
+  MQTTClient.setTimeout(5000);
+  MQTTClient.begin(MQTTServerName.c_str(), MQTTPort, net);
+
+  if( MQTTClient.connect(MQTTDeviceName.c_str(), MQTTUsername.c_str(), MQTTPassword.c_str())) { 
+    MQTTClient.publish(MQTTRootTopic+"/PIR", (PIR_State)?"On":"Off", false, 2);
+    MQTTClient.publish(MQTTRootTopic+"/BatteryVoltage", String(cache.BatteryVoltage, 3), false, 2);
+    snprintf(buf, sizeof(buf)-1, "%ld.%06ld", tv.tv_sec, tv.tv_usec);
+    MQTTClient.publish(MQTTRootTopic+"/BatteryRuntime", buf, false, 2);
+    snprintf(buf, sizeof(buf)-1, "%llu", cache.NumberOfRestarts);
+    MQTTClient.publish(MQTTRootTopic+"/Restarts", buf, false, 2);
+    snprintf(buf, sizeof(buf)-1, "%llu", cache.ActiveTime);
+    MQTTClient.publish(MQTTRootTopic+"/ActiveTime", buf, false, 2);
+    return true;
+  }
+
+  return false;
 }
 
 /******************************************************************************
@@ -160,25 +219,21 @@ void setup() {
   pinMode(2, OUTPUT);
   digitalWrite(2, HIGH);
 
-  //read PIR state now, because it might change during the time it takes to connect to WiFi
-  pinMode(PIR_GPIO, INPUT);
-  uint8_t PIR_State = digitalRead(PIR_GPIO);
-  
   cache.NumberOfRestarts++;
 
   Serial.begin(115200);
   Serial.print("===================================================\r\n");
-  Serial.printf("FireBeetle starting up\r\n" \
+  Serial.printf("FireBeetle active\r\n" \
                 " Compiled at: " __DATE__ " - " __TIME__ "\r\n" \
                 " ESP-IDF: %s\r\n", esp_get_idf_version());
 
   //read battery voltage
-  float BatteryVoltage = readBattery();
-  Serial.printf("Voltage: %4.3f V\r\n", BatteryVoltage);
+  cache.BatteryVoltage = readBattery();
+  Serial.printf("Voltage: %4.3f V\r\n", cache.BatteryVoltage);
 
   //a reset is required to wakeup again from below CRITICALLY_LOW_BATTERY_VOLTAGE
   //this is to prevent damaging the empty battery by saving as much power as possible
-  if (BatteryVoltage < CRITICALLY_LOW_BATTERY_VOLTAGE) {
+  if (cache.BatteryVoltage < CRITICALLY_LOW_BATTERY_VOLTAGE) {
     Serial.println("Battery critically low, hibernating...");
 
     //switch off everything that might consume power
@@ -186,12 +241,13 @@ void setup() {
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
     esp_sleep_pd_config(ESP_PD_DOMAIN_XTAL, ESP_PD_OPTION_OFF);
-    //esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_OFF);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_OFF);
     //esp_sleep_pd_config(ESP_PD_DOMAIN_CPU, ESP_PD_OPTION_OFF);
 
     //disable all wakeup sources
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    
+
+    cache.ActiveTime += millis();
     digitalWrite(2, LOW);
     esp_deep_sleep_start();
 
@@ -203,15 +259,16 @@ void setup() {
   //stop doing the regular work
   //when put on charge the device will wakeup after a while and recognize voltage is OK
   //this way the battery can run low, put still wakeup without physical interaction
-  if (BatteryVoltage < LOW_BATTERY_VOLTAGE) {
+  if (cache.BatteryVoltage < LOW_BATTERY_VOLTAGE) {
     Serial.println("Battery low, deep sleeping...");
 
     //sleep ~60 minutes if battery is CRITICALLY_LOW_BATTERY_VOLTAGE to VERY_LOW_BATTERY_VOLTAGE
     //sleep ~10 minutes if battery is VERY_LOW_BATTERY_VOLTAGE to LOW_BATTERY_VOLTAGE
-    uint64_t sleeptime = (BatteryVoltage >= VERY_LOW_BATTERY_VOLTAGE) ? \
+    uint64_t sleeptime = (cache.BatteryVoltage >= VERY_LOW_BATTERY_VOLTAGE) ? \
                            10*60*1000000ULL : 60*60*1000000ULL;
     
     esp_sleep_enable_timer_wakeup(sleeptime);
+    cache.ActiveTime += millis();
     digitalWrite(2, LOW);
     esp_deep_sleep_start();
     
@@ -219,73 +276,107 @@ void setup() {
     return;
   }
 
-  //distinguish first start or wakeup
+  //check if a reset/power-on occured
   if (esp_reset_reason() == ESP_RST_POWERON) {
-    Serial.printf("ESP was just switched ON\r\n");
-    cache.NumberOfRestarts = 0;
+      Serial.printf("ESP was just switched ON\r\n");
+      cache.state = S_STARTUP;
+      cache.ActiveTime = 0;
+      cache.NumberOfRestarts = 0;
 
-    //default is to have WiFi off
-    if (WiFi.getMode() != WIFI_OFF) {
-      Serial.printf("WiFi wasn't off!\r\n");
-      WiFi.persistent(true);
-      WiFi.mode(WIFI_OFF);
-    }
+      //set RTC to 0
+      struct timeval tv;
+      tv.tv_sec = 0;
+      tv.tv_usec = 0;
+      settimeofday(&tv, NULL);
 
-    //set RTC to 0
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 0;
-    settimeofday(&tv, NULL);
+      //default is to have WiFi off
+      if (WiFi.getMode() != WIFI_OFF) {
+        Serial.printf("WiFi wasn't off!\r\n");
+        WiFi.persistent(true);
+        WiFi.mode(WIFI_OFF);
+      }
 
-    WiFiUP(false);
-  } else {
-    Serial.printf("ESP woke up (%lu)\r\n", cache.NumberOfRestarts);
+      //try to connect
+      WiFiUP(false);
+      WiFi.disconnect(true, true);
 
-    //read RTC
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    Serial.printf("Total Time since RstPowerOn: %lu s\r\n", tv.tv_sec);
-
-    WiFiUP(true);
+      //transition to state S_STARTUP and wait till sensor output settles
+      cache.state = S_STARTUP;
+      esp_sleep_enable_timer_wakeup(STABILITY_TIME);
   }
 
-  //establish connection to MQTT server
-  WiFiClient net;
-  MQTTClient MQTTClient;
-  MQTTClient.setTimeout(5000);
-  MQTTClient.begin(MQTTServerName.c_str(), MQTTPort, net);
-  if( MQTTClient.connect(MQTTDeviceName.c_str(), MQTTUsername.c_str(), MQTTPassword.c_str())) {
-    Serial.println("Publishing MQTT message"); 
+  // check if ESP returns from deepsleep
+  if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
+    switch(esp_sleep_get_wakeup_cause()) {
+      case ESP_SLEEP_WAKEUP_TIMER:
+        Serial.printf("ESP woke up due to timer\r\n");
+
+        switch(cache.state) {
+          case S_IGNORE_PIR_AFTER_MOTION:
+            Serial.printf("transition to state MOTION\r\n");
+            cache.state = S_MOTION;
+            esp_sleep_enable_ext0_wakeup(PIR_DEEPSLEEP_PIN, 1);
+            esp_sleep_enable_timer_wakeup(DWELL_TIME);
+            break;
+
+         case S_IGNORE_PIR_AFTER_REST:
+         case S_STARTUP:
+            Serial.printf("transition to state IDLE\r\n");
+            cache.state = S_IDLE;
+            esp_sleep_enable_ext0_wakeup(PIR_DEEPSLEEP_PIN, 1);
+            esp_sleep_enable_timer_wakeup(LONG_TIME);
+            break;
+          
+          case S_MOTION:          
+          case S_IDLE:
+            Serial.printf("transition to state IGNORE_PIR_AFTER_REST\r\n");
+            cache.state = S_IGNORE_PIR_AFTER_REST;
+            WiFiUP(true);
+            SignalMotion(false);
+            WiFi.disconnect(true, true);
+            esp_sleep_enable_timer_wakeup(STABILITY_TIME);
+            break;
+
+          default:
+            Serial.printf("this state should not occur\r\n");
+        }
+        break;
     
-    //connecting to WiFi takes some time,
-    //it might happen that PIR state changes during that time
-    //ensure that MQTT reports this by sending both states if it did change indeed
-    if(PIR_State == digitalRead(PIR_GPIO)) {
-      //PIR state did not change, just publish one state
-      MQTTClient.publish(MQTTRootTopic+"/PIR", (PIR_State)?"On":"Off", false, 2);
-    } else {
-      //PIR state changed, first publish what it was when starting sketch
-      MQTTClient.publish(MQTTRootTopic+"/PIR", (PIR_State)?"On":"Off", false, 2);
+      case ESP_SLEEP_WAKEUP_EXT0:
+        Serial.printf("ESP woke up by EXT0\r\n");
 
-      //set variable to the new state of PIR and publish what it is now
-      PIR_State != PIR_State; 
-      MQTTClient.publish(MQTTRootTopic+"/PIR", (PIR_State)?"On":"Off", false, 2);
+        switch(cache.state) {
+          case S_MOTION:
+            Serial.printf("transition to S_IGNORE_PIR_AFTER_MOTION\r\n");
+            cache.state = S_IGNORE_PIR_AFTER_MOTION;
+            esp_sleep_enable_timer_wakeup(SHORT_TIME);
+            break;
+          
+          case S_IDLE:
+            Serial.printf("signalling motion and transition to S_IGNORE_PIR_AFTER_MOTION\r\n");
+            WiFiUP(true);
+            SignalMotion(true);
+            WiFi.disconnect(true, true);
+        
+            cache.state = S_IGNORE_PIR_AFTER_MOTION;
+            esp_sleep_enable_timer_wakeup(SHORT_TIME);
+            break;
+          
+          default:
+          case S_IGNORE_PIR_AFTER_MOTION:
+          case S_IGNORE_PIR_AFTER_REST:
+          case S_STARTUP:
+            Serial.printf("this state should not occur\r\n");
+        }
+        break;
+
+      default:
+        Serial.printf("ESP woke due to an unknown reason\r\n");
     }
-
-    MQTTClient.publish(MQTTRootTopic+"/BatteryVoltage", String(BatteryVoltage, 3), false, 2);
   }
 
-  //bring everything down
-  WiFi.disconnect(true, true);
-
-  //define what wakes device up again
-  //wakeup in ~12h or if GPIO4 changes state
-  esp_sleep_enable_timer_wakeup(12*60*60*1000000ULL);
-  esp_sleep_enable_ext0_wakeup(PIR_DEEPSLEEP_PIN, (PIR_State)?0:1);
-
-  Serial.printf("=== Sleep at %d ms ===\r\n", millis());
-
-  //LED off and sleep
+  Serial.printf("=== entering deepsleep after %d ms ===\r\n", millis());
+  cache.ActiveTime += millis();
   digitalWrite(2, LOW);
   esp_deep_sleep_start();
   
