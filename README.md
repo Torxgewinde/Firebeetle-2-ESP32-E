@@ -1,13 +1,13 @@
 # Firebeetle-2-ESP32-E motion sensor
 This project is about using the Firebeetle ESP32-E (SKU:DFR0654-F) as battery powered motion sensor
 
-<img src="IMG_3201.JPG" width="480">
+<img src="IMG_3333.JPG" width="480">
 
 Description
 ===========
 This WiFi motion sensor consists of:
 - LiPo-Battery (<a href="https://www.eremit.de/p/eremit-3-7v-2000mah-lipo-akku-654060-jst-ph-2-0mm">2000mAh</a> LiPo battery with 3.7V nominal voltage and protection circuits)
-- PIR sensor to detect motion (HC-SR501 <a href="https://randomnerdtutorials.com/modifying-cheap-pir-motion-sensor-to-work-at-3-3v/">modified</a> to bypass the LDO so it operates at 3.3V)
+- PIR sensor to detect motion (Panasonic Series WL EKMB1303111K, 6µA current consumption)
 - ESP32 development board with LiPo charging circuit (<a href="https://wiki.dfrobot.com/FireBeetle_Board_ESP32_E_SKU_DFR0654">Firebeetle-2-ESP32-E</a> because it can really deepsleep with low deepsleep current)
 
 Mainly the ESP32 saves power by entering DeepSleep state. In this state it draws about 23 µA if the "LowPower-Pad" to the RGB-color-LED is cut. Two events cause the ESP32 to wake up:
@@ -20,12 +20,11 @@ Powersaving
 ===========
 Cache WiFi channel and BSSID/MAC
 --------------------------------
-To bring the latency and energy-consumption down, Wifi channel and BSSID are cached in the RTC-RAM-section of the ESP. These cached values are still available even if the ESP32 wakes up from deep sleep. With good signal, the ESP32 is active for 450 to 1200 ms if the cached values still work. If the cached values do not work, the ESP32 performs a scan of all channels, authenticates and associates to the strongest Accesspoint found. This consumes a lot more time and thus energy, because the ESP32 needs to check all channels and see if it catches beacons of matching Accesspoints.
+To bring the latency and energy-consumption down, Wifi channel and BSSID are cached in the RTC-RAM-section of the ESP. These cached values are still available even if the ESP32 wakes up from deep sleep. With good signal, the ESP32 is active for 450 to 1200 ms if the cached values still work. If the cached values do not work, the ESP32 performs a scan of all channels, authenticates and associates to the strongest Accesspoint found. This consumes a lot more time and thus energy, because the ESP32 needs to check all channels and see if it catches beacons of matching Accesspoints. It depends a lot on the accesspoints if the connections is quick and energy conserving or slow.
 
 PIR sensor
 ----------
-The choosen PIR sensor (<a href=https://www.mpja.com/download/31227sc.pdf>HC-SR501</a>) is a compromise, as it consumes ~50 µA in idle state and <a href="https://randomnerdtutorials.com/modifying-cheap-pir-motion-sensor-to-work-at-3-3v/">requires soldering</a> for 3.3V operation, but it is what I had to develop the sketch. Basically any 3.3V compatible PIR sensor can be used (for example <a href="https://mediap.industry.panasonic.eu/assets/download-files/import/ca_pir_motionsensors_1192_en.pdf">Panasonic PaPIR</a> consume less current in the range of about 6 µA).
-Another power-saving-hint is to adjust the PIR sensor time after detecting motion to "retrigger" and to dwell for a couple of minutes in active state. This way the ESP32 does not report many events if a person is crossing the sensor every minute.
+The PIR sensor EKMB1303111K is a 3.3V type sensor with low power consumption and a reasonable price (<a href="https://mediap.industry.panasonic.eu/assets/download-files/import/ca_pir_motionsensors_1192_en.pdf">Panasonic PaPIR</a>).
 
 Battery protection
 ==================
