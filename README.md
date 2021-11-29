@@ -6,9 +6,9 @@ This project is about using the Firebeetle ESP32-E (SKU:DFR0654-F) as battery po
 Description
 ===========
 This WiFi motion sensor consists of:
-- LiPo-Battery (<a href="https://www.eremit.de/p/eremit-3-7v-2000mah-lipo-akku-654060-jst-ph-2-0mm">2000mAh</a> LiPo battery with 3.7V nominal voltage and protection circuits)
-- PIR sensor to detect motion (Panasonic Series WL EKMB1303111K, <a href="https://mediap.industry.panasonic.eu/assets/download-files/import/ca_pir_motionsensors_1192_en.pdf">Datasheet</a>, 6µA current consumption)
-- ESP32 development board with LiPo charging circuit (<a href="https://wiki.dfrobot.com/FireBeetle_Board_ESP32_E_SKU_DFR0654">Firebeetle-2-ESP32-E</a> because it can really deepsleep with low deepsleep current)
+- LiPo-Battery (<a href="https://www.eremit.de/p/eremit-3-7v-2000mah-lipo-akku-654060-jst-ph-2-0mm">2000mAh</a> LiPo battery with 3.7V nominal voltage and protection circuits, ~7€)
+- PIR sensor to detect motion (Panasonic Series WL EKMB1303111K, <a href="https://mediap.industry.panasonic.eu/assets/download-files/import/ca_pir_motionsensors_1192_en.pdf">Datasheet</a>, 6µA current consumption, sometimes for ~9€)
+- ESP32 development board with LiPo charging circuit (<a href="https://wiki.dfrobot.com/FireBeetle_Board_ESP32_E_SKU_DFR0654">Firebeetle-2-ESP32-E</a> because it can really deepsleep with low deepsleep current, ~11€)
 
 Mainly the ESP32 saves power by entering DeepSleep state. In this state it draws about 23 µA if the "LowPower-Pad" to the RGB-color-LED is cut. Two events cause the ESP32 to wake up:
 - either a timer, or if
