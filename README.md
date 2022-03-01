@@ -36,3 +36,26 @@ Deep-discharge protection
 -------------------------
 Besides those safety measures build into the LiPo-battery, the sketch measures the battery voltage. To obtain accurate voltages, the sketch uses factory calibration values. Espressif either sets two-point, one-point or no calibration value to the EFUSE-area.
 If the voltage is below 3.2V, the sketch stops its regular work and enters deep-sleep for ten minute intervals. If put on a charger the device automatically enters the regular operation mode again within those ~10 minutes. If the battery drops to 3.1 to 3.0 V the sleep interval is longer with 60 minutes. If the voltage drops below 3.0V the device enters a hibernate-mode and a manual push of the reset-button is required. The voltage drops quite steeply below 3.3V and not many Ampere-hours are wasted with these levels.
+
+Tests
+=====
+To measure the battery lifetime a device is placed in a busy room. Some figures:
+```
+2021-11-24_08:44:35 Firebeetle2 off
+2021-11-24_08:44:35 Firebeetle2 BatteryVoltage: 4.206
+2021-11-24_08:44:35 Firebeetle2 BatteryRuntime: 52811.404255
+2021-11-24_08:44:35 Firebeetle2 Restarts: 52
+2021-11-24_08:44:35 Firebeetle2 ActiveTime: 42923
+...
+2022-03-01_18:45:38 Firebeetle2 off
+2022-03-01_18:45:38 Firebeetle2 BatteryVoltage: 4.020
+2022-03-01_18:45:38 Firebeetle2 BatteryRuntime: 8534834.775249
+2022-03-01_18:45:38 Firebeetle2 Restarts: 15224
+2022-03-01_18:45:38 Firebeetle2 ActiveTime: 8274353
+```
+
+
+As a plot it looks like this:
+![Green line is number of activations, green dots are on/off states, red is battery voltage in %](https://user-images.githubusercontent.com/12876583/156223737-926e025f-23ec-48db-a13e-d30222c72096.png)
+
+
