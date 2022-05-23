@@ -47,15 +47,15 @@ To measure the battery lifetime a device is placed in a busy room. Some figures:
 2021-11-24_08:44:35 Firebeetle2 Restarts: 52
 2021-11-24_08:44:35 Firebeetle2 ActiveTime: 42923
 ...
-2022-03-01_18:45:38 Firebeetle2 off
-2022-03-01_18:45:38 Firebeetle2 BatteryVoltage: 4.020
-2022-03-01_18:45:38 Firebeetle2 BatteryRuntime: 8534834.775249
-2022-03-01_18:45:38 Firebeetle2 Restarts: 15224
-2022-03-01_18:45:38 Firebeetle2 ActiveTime: 8274353
+2022-05-23_18:16:49 Firebeetle2 on
+2022-05-23_18:16:49 Firebeetle2 BatteryVoltage: 3.932
+2022-05-23_18:16:49 Firebeetle2 BatteryRuntime: 15756413.517392
+2022-05-23_18:16:49 Firebeetle2 Restarts: 28330
+2022-05-23_18:16:49 Firebeetle2 ActiveTime: 14144317
 ```
 
 
 As a plot it looks like this:
-![Green line is number of activations, green dots are on/off states, red is battery voltage in %](https://user-images.githubusercontent.com/12876583/156223737-926e025f-23ec-48db-a13e-d30222c72096.png)
+![Green line is number of activations, green dots are on/off states, red is battery voltage in %](https://user-images.githubusercontent.com/12876583/169874366-319b0b02-a340-44a7-9361-b057a8a5cffc.png)
 
 
